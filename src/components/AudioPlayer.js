@@ -1,24 +1,42 @@
 import React, { useRef, useEffect } from 'react';
 
-function AudioPlayer({ src, onTimeUpdate, onLoadedMetadata, gainValue = 1, filterType = null, filterFreq = 20000 }) {
+function AudioPlayer({
+  src,
+  audioContext,
+  analyserNodeToConnect,
+  onAudioReady,
+  onTimeUpdate,
+  onLoadedMetadata,
+  gainValue = 1,
+  filterType = null,
+  filterFreq = 20000,
+}) {
   const audioRef = useRef(null);
-  const audioContextRef = useRef(null);
   const sourceRef = useRef(null);
   const gainNodeRef = useRef(null);
   const filterNodeRef = useRef(null);
+  const isGraphConnectedRef = useRef(false);
 
   useEffect(() => {
-    if (audioRef.current) {
-      const audio = audioRef.current;
+    const audio = audioRef.current;
 
-      // Inicjalizacja Web Audio API
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      const audioContext = audioContextRef.current;
+    // console.log('AudioPlayer: useEffect triggered. Src:', src, 'AudioContext available:', !!audioContext, 'Analyser available:', !!analyserNodeToConnect);
 
-      if (!sourceRef.current) {
-        sourceRef.current = audioContext.createMediaElementSource(audio);
+    if (audio && audioContext && src) {
+      // console.log('AudioPlayer: Inside main logic. Passed AudioContext state:', audioContext.state, 'for src:', src);
+
+      if (!sourceRef.current || sourceRef.current.mediaElement !== audio) {
+        if (sourceRef.current) {
+          try { sourceRef.current.disconnect(); } catch (e) { /* console.warn("AudioPlayer: Error disconnecting old source", e); */ }
+        }
+        try {
+          sourceRef.current = audioContext.createMediaElementSource(audio);
+          // console.log('AudioPlayer: MediaElementSourceNode CREATED successfully for src:', src, sourceRef.current);
+        } catch (e) {
+          console.error("AudioPlayer: FATAL Error creating media element source. Src:", src, "Error:", e);
+          isGraphConnectedRef.current = false;
+          return;
+        }
       }
       const source = sourceRef.current;
 
@@ -27,81 +45,132 @@ function AudioPlayer({ src, onTimeUpdate, onLoadedMetadata, gainValue = 1, filte
       }
       const gainNode = gainNodeRef.current;
 
-      // Usuwamy stary filtr jeśli istnieje
-      if (filterNodeRef.current) {
-        filterNodeRef.current.disconnect();
+      if (gainNode.gain.value !== gainValue) {
+        try { gainNode.gain.setValueAtTime(gainValue, audioContext.currentTime); } catch (e) { /* console.warn("AudioPlayer: Error setting gain value...", e); */ }
+      }
+
+      let currentOutputNode = source;
+
+      if (isGraphConnectedRef.current) {
+        try {
+          source.disconnect();
+          if (filterNodeRef.current) filterNodeRef.current.disconnect();
+          gainNode.disconnect();
+        } catch (e) { /* console.warn("AudioPlayer: Harmless error during pre-reconnect disconnections...", e); */ }
       }
       
-      let currentNode = source; // Zaczynamy od źródła
+      currentOutputNode.connect(gainNode);
+      currentOutputNode = gainNode;
 
-      // Podłączanie GainNode
-      gainNode.gain.value = gainValue;
-      currentNode.disconnect(); // Odłączamy poprzednie połączenie źródła
-      currentNode.connect(gainNode);
-      currentNode = gainNode; // GainNode jest teraz bieżącym węzłem
-
-      // Podłączanie BiquadFilterNode (jeśli aktywny)
       if (filterType && filterType !== 'none') {
-        filterNodeRef.current = audioContext.createBiquadFilter();
+        if (!filterNodeRef.current || filterNodeRef.current.type !== filterType) {
+          if (filterNodeRef.current) filterNodeRef.current.disconnect();
+          filterNodeRef.current = audioContext.createBiquadFilter();
+          filterNodeRef.current.type = filterType;
+        }
         const filterNode = filterNodeRef.current;
-        filterNode.type = filterType;
-        filterNode.frequency.setValueAtTime(filterFreq, audioContext.currentTime);
-        // filterNode.Q.setValueAtTime(1, audioContext.currentTime); // Domyślna wartość Q
-        
-        currentNode.disconnect(); // Odłączamy poprzednie połączenie (np. z gainNode)
-        currentNode.connect(filterNode);
-        currentNode = filterNode; // FilterNode jest teraz bieżącym węzłem
+        if (filterNode.frequency.value !== filterFreq) {
+          try { filterNode.frequency.setValueAtTime(filterFreq, audioContext.currentTime); } catch (e) { /* console.warn("AudioPlayer: Error setting filter frequency...", e); */ }
+        }
+        currentOutputNode.connect(filterNode);
+        currentOutputNode = filterNode;
+      } else if (filterNodeRef.current) {
+        filterNodeRef.current.disconnect();
+        filterNodeRef.current = null;
       }
+
+      if (analyserNodeToConnect) {
+        currentOutputNode.connect(analyserNodeToConnect);
+      }
+
+      currentOutputNode.connect(audioContext.destination);
+      isGraphConnectedRef.current = true;
+      // console.log('AudioPlayer: Audio graph connected. Context state:', audioContext.state);
+
+      // --- Event Listeners ---
+      const handleTimeUpdateEvent = () => onTimeUpdate && onTimeUpdate(audio.currentTime, audio.duration);
       
-      // Podłączanie do wyjścia
-      currentNode.connect(audioContext.destination);
-
-
-      const handleTimeUpdate = () => {
-        if (onTimeUpdate) {
-          onTimeUpdate(audio.currentTime, audio.duration);
+      const handleLoadedMetadataEvent = () => {
+        // console.log('AudioPlayer: metadata loaded. Audio duration:', audio.duration, 'AudioContext state:', audioContext.state);
+        if (onLoadedMetadata) onLoadedMetadata(audio.duration);
+        // Sprawdź, czy kontekst jest aktywny, zanim wywołasz onAudioReady
+        if (audioContext.state === 'running' && typeof onAudioReady === 'function') {
+          // console.log('AudioPlayer: Context running (on metadata), calling onAudioReady.');
+          onAudioReady();
         }
       };
 
-      const handleLoadedMetadata = () => {
-        if (onLoadedMetadata) {
-          onLoadedMetadata(audio.duration);
+      const handlePlayEvent = () => {
+        console.log('AudioPlayer: "play" event on <audio> element. AudioContext state:', audioContext.state);
+        if (audioContext.state === 'suspended') {
+          audioContext.resume().then(() => {
+            console.log('AudioPlayer: AudioContext RESUMED on "play" event. New state:', audioContext.state);
+            if (typeof onAudioReady === 'function' && audioContext.state === 'running') {
+              // Po wznowieniu kontekstu i jeśli onAudioReady jest zdefiniowane, wywołaj je
+              // aby upewnić się, że ProcessingZone wie, że może zacząć rysować widmo.
+              onAudioReady();
+            }
+          }).catch(e => console.error('AudioPlayer: Error resuming context on "play" event:', e));
+        } else if (audioContext.state === 'running' && typeof onAudioReady === 'function') {
+          // Jeśli kontekst już działa, po prostu upewnij się, że onAudioReady jest wywołane
+          // console.log('AudioPlayer: Context already running (on play), calling onAudioReady.');
+          onAudioReady();
         }
-         // Autoodtwarzanie może wymagać interakcji użytkownika w niektórych przeglądarkach
-        // audio.play().catch(e => console.warn("Autoplay blocked:", e));
       };
+
+      audio.addEventListener('timeupdate', handleTimeUpdateEvent);
+      audio.addEventListener('loadedmetadata', handleLoadedMetadataEvent);
+      audio.addEventListener('play', handlePlayEvent); // <-- DODANY EVENT LISTENER
       
-      audio.addEventListener('timeupdate', handleTimeUpdate);
-      audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+      // Jeśli audio jest już gotowe do odtwarzania (np. po zmianie src i auto-load)
+      // i kontekst już działa, wywołaj onAudioReady
+      if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA && audioContext.state === 'running' && typeof onAudioReady === 'function') {
+        // console.log('AudioPlayer: Initial check - context running & enough data, calling onAudioReady.');
+        onAudioReady();
+      }
 
       return () => {
-        audio.removeEventListener('timeupdate', handleTimeUpdate);
-        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-        // Nie zamykamy audioContext tutaj, aby umożliwić zmianę pliku bez resetu
-        // source.disconnect(); // Odłączamy tylko source
-        // if (gainNodeRef.current) gainNodeRef.current.disconnect();
-        // if (filterNodeRef.current) filterNodeRef.current.disconnect();
+        // console.log('AudioPlayer: Cleanup function for src:', src, 'Disconnecting graph nodes.');
+        audio.removeEventListener('timeupdate', handleTimeUpdateEvent);
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadataEvent);
+        audio.removeEventListener('play', handlePlayEvent); // <-- Usuń listener
+        if (sourceRef.current) { try { sourceRef.current.disconnect(); } catch (e) { /* ignore */ } }
+        if (gainNodeRef.current) { try { gainNodeRef.current.disconnect(); } catch (e) { /* ignore */ } }
+        if (filterNodeRef.current) { try { filterNodeRef.current.disconnect(); } catch (e) { /* ignore */ } }
+        isGraphConnectedRef.current = false;
+        // console.log('AudioPlayer: Graph disconnected in cleanup.');
       };
+    } else {
+      // console.log('AudioPlayer: useEffect skipped - missing audio, audioContext, or src.');
+      if (isGraphConnectedRef.current) {
+        if (sourceRef.current) try { sourceRef.current.disconnect(); } catch(e) {}
+        if (gainNodeRef.current) try { gainNodeRef.current.disconnect(); } catch(e) {}
+        if (filterNodeRef.current) try { filterNodeRef.current.disconnect(); } catch(e) {}
+        isGraphConnectedRef.current = false;
+      }
     }
-  }, [src, onTimeUpdate, onLoadedMetadata, gainValue, filterType, filterFreq]); // Re-run effect if src, gainValue, or filter changes
+  }, [
+    src, audioContext, analyserNodeToConnect, onAudioReady,
+    onTimeUpdate, onLoadedMetadata, gainValue, filterType, filterFreq,
+  ]);
 
-  // Zmiana źródła audio
   useEffect(() => {
-    if (audioRef.current && src) {
-      audioRef.current.src = src;
-      // audioRef.current.load(); // Wymuszenie załadowania nowego src
-      // audioRef.current.play().catch(e => console.warn("Autoplay blocked:", e));
-    } else if (audioRef.current) {
-      audioRef.current.src = ""; // Czyścimy src, jeśli nie ma wybranego pliku
+    if (audioRef.current) {
+      // console.log('AudioPlayer: src prop changed to:', src, '. Updating <audio> element src.');
+      if (src) {
+        audioRef.current.src = src;
+        audioRef.current.load();
+      } else {
+        audioRef.current.src = "";
+        audioRef.current.load();
+      }
+      isGraphConnectedRef.current = false;
     }
   }, [src]);
 
+  if (!src) return <p>Brak źródła audio do odtworzenia.</p>;
 
-  if (!src) return <p>Wybierz plik audio do odtworzenia.</p>;
-
-  return (
-    <audio ref={audioRef} controls style={{ width: '100%' }} />
-  );
+  return <audio ref={audioRef} controls style={{ width: '100%' }} />;
 }
 
 export default AudioPlayer;
