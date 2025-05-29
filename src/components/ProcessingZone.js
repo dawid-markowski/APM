@@ -1,41 +1,64 @@
-import React, { useState, useEffect, useRef } from 'react';
-import AudioPlayer from './AudioPlayer'; // Importujemy nasz odtwarzacz
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import AudioPlayer from './AudioPlayer';
 
 function ProcessingZone({ selectedAudio }) {
   const [gain, setGain] = useState(1);
-  const [filterType, setFilterType] = useState('none'); // 'lowpass', 'highpass', 'bandpass', 'lowshelf', 'highshelf', 'peaking', 'notch', 'allpass'
-  const [filterFrequency, setFilterFrequency] = useState(350); // Częstotliwość dla filtra
-  const [spectrumData, setSpectrumData] = useState(null);
+  const [filterType, setFilterType] = useState('none');
+  const [filterFrequency, setFilterFrequency] = useState(350);
 
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const canvasRef = useRef(null);
   const animationFrameIdRef = useRef(null);
 
-
-  // Inicjalizacja Web Audio API dla analizatora
+  // Inicjalizacja AudioContext i AnalyserNode
   useEffect(() => {
-    if (selectedAudio && !audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+    if (!audioContextRef.current) {
+      try {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+        console.log('ProcessingZone: AudioContext CREATED, initial state:', audioContextRef.current.state);
+      } catch (e) {
+        console.error("ProcessingZone: Failed to create AudioContext.", e);
+        alert("Nie można zainicjalizować Web Audio API w tej przeglądarce.");
+        return;
+      }
     }
-    // Czystka przy odmontowaniu komponentu lub zmianie selectedAudio
+
+    if (audioContextRef.current && !analyserRef.current) {
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 2048;
+      console.log('ProcessingZone: AnalyserNode CREATED.');
+    }
+
+    const localAudioCtx = audioContextRef.current; // Dla funkcji czyszczącej
     return () => {
+      console.log('ProcessingZone: Unmounting. AnimationFrameId:', animationFrameIdRef.current);
       if (animationFrameIdRef.current) {
         cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
       }
-      // Nie zamykamy kontekstu tutaj, ponieważ jest on współdzielony z AudioPlayer
-      // if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      //   audioContextRef.current.close().catch(e => console.error("Error closing context:", e));
-      //   audioContextRef.current = null;
+      // Rozważ zamknięcie kontekstu, jeśli jest to główny komponent zarządzający audio
+      // i nie będzie już potrzebny. Na razie zostawiamy to do ewentualnej późniejszej obsługi.
+      // if (localAudioCtx && localAudioCtx.state !== 'closed') {
+      //   localAudioCtx.close().catch(e => console.warn("ProcessingZone: Error closing context on unmount:", e));
       // }
     };
-  }, [selectedAudio]);
+  }, []); // Pusta tablica, aby uruchomić tylko raz przy montażu
 
-
-  // Funkcja do rysowania widma
-  const drawSpectrum = () => {
-    if (!analyserRef.current || !canvasRef.current || !audioContextRef.current) return;
+  const drawSpectrum = useCallback(() => {
+    if (!analyserRef.current || !canvasRef.current || !audioContextRef.current) {
+      if(animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
+      return;
+    }
     
+    if (audioContextRef.current.state !== 'running') {
+      // console.log('drawSpectrum: AudioContext not running (state:', audioContextRef.current.state, '). Requesting next frame.');
+      // Pętla będzie kontynuowana, ale rysowanie efektywnie czeka, aż kontekst będzie 'running'
+      animationFrameIdRef.current = requestAnimationFrame(drawSpectrum);
+      return;
+    }
+
     const analyser = analyserRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -44,7 +67,7 @@ function ProcessingZone({ selectedAudio }) {
 
     analyser.getByteFrequencyData(dataArray);
 
-    ctx.fillStyle = 'rgb(40, 44, 52)'; // Kolor tła canvasu
+    ctx.fillStyle = 'rgb(40, 44, 52)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const barWidth = (canvas.width / bufferLength) * 2.5;
@@ -53,94 +76,46 @@ function ProcessingZone({ selectedAudio }) {
 
     for (let i = 0; i < bufferLength; i++) {
       barHeight = dataArray[i];
-      
-      const r = barHeight + (25 * (i/bufferLength));
-      const g = 250 * (i/bufferLength);
+      const r = barHeight + 25 * (i / bufferLength);
+      const g = 250 * (i / bufferLength);
       const b = 50;
-
-      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillStyle = `rgb(${Math.floor(r)},${Math.floor(g)},${b})`;
       ctx.fillRect(x, canvas.height - barHeight / 2, barWidth, barHeight / 2);
-
       x += barWidth + 1;
     }
     animationFrameIdRef.current = requestAnimationFrame(drawSpectrum);
-  };
+  }, []);
 
 
-  // Podłączenie analizatora i rozpoczęcie rysowania widma
-  // Ta funkcja będzie wywoływana z AudioPlayer przez przekazanie referencji
-  const setupAnalyser = (audioElement) => {
-    if (!selectedAudio || !audioContextRef.current || !audioElement) return;
-
-    const audioContext = audioContextRef.current;
-    if (!analyserRef.current) {
-      analyserRef.current = audioContext.createAnalyser();
-      analyserRef.current.fftSize = 2048; // Standardowa wartość
-    }
-    const analyser = analyserRef.current;
-
-    // Potrzebujemy źródła z elementu audio, aby podłączyć do analizatora
-    // To jest nieco skomplikowane, bo AudioPlayer zarządza swoim źródłem.
-    // Idealnie, AudioPlayer powinien zwracać swoje węzły lub akceptować węzeł analizatora.
-    // Dla uproszczenia, spróbujemy podłączyć się do elementu audio, który jest już w DOM.
-    // UWAGA: To może nie być idealne rozwiązanie, jeśli AudioPlayer tworzy złożony graf.
-    // Lepszym podejściem byłoby przekazanie `analyserNode` do `AudioPlayer`
-    // i połączenie go wewnątrz `AudioPlayer`.
-    // Na razie spróbujemy prostego podejścia:
-    try {
-      const source = audioContext.createMediaElementSource(audioElement);
-      // Potrzebujemy jakiegoś węzła przed destination w AudioPlayer, aby podłączyć analyser
-      // Na ten moment nie mamy bezpośredniego dostępu do gainNode/filterNode z AudioPlayer w tym komponencie
-      // To jest ograniczenie obecnej architektury.
-      // Aby widmo działało poprawnie z filtrami, graf audio musi być:
-      // source -> filter -> gain -> analyser -> destination
-      // source -> gain -> filter -> analyser -> destination
-      // W AudioPlayer.js, graf jest source -> gain -> filter -> destination.
-      // Brakuje nam "haka" na analyser przed destination.
-
-      // Obejście: Załóżmy, że `AudioPlayer` zawsze podłącza się do `audioContext.destination`.
-      // Spróbujemy podłączyć analizator "równolegle" do `destination` TYLKO do celów wizualizacji.
-      // To nie pokaże efektu filtrów na widmie, jeśli filtr jest za gain.
-      // Aby to poprawnie zaimplementować, `AudioPlayer` musi być bardziej elastyczny.
-
-      // Dla celów demonstracyjnych, załóżmy, że chcemy widmo *po* ewentualnych filtrach
-      // i wzmocnieniu, jeśli AudioPlayer by to umożliwiał.
-      // Na razie, jeśli AudioPlayer używa tego samego audioContext, możemy spróbować
-      // podłączyć analyser do `gainNode` lub `filterNode` z `AudioPlayer`, jeśli byłyby one
-      // eksportowane lub zarządzane centralnie.
-
-      // Ponieważ nie mamy dostępu do wewnętrznych węzłów AudioPlayera,
-      // poniższe nie zadziała poprawnie z efektami AudioPlayera na widmie.
-      // source.connect(analyser);
-      // analyser.connect(audioContext.destination); // Analizator nie powinien iść do destination jeśli już jest ścieżka audio
-
-      console.warn("Spectrum analysis might not reflect all audio processing due to component separation. For accurate spectrum after processing, the AudioPlayer component would need to integrate the analyser node into its audio graph before destination.");
-
-      // Na potrzeby tego przykładu, załóżmy, że chcemy widmo bezpośrednio ze źródła.
-      // W praktyce, to powinno być bardziej zintegrowane z AudioPlayer.
-      if (audioElement && audioContextRef.current && audioContextRef.current.state === 'running') {
-        if (!analyserRef.current) {
-            analyserRef.current = audioContextRef.current.createAnalyser();
-        }
-        const internalSource = audioContextRef.current.createMediaElementSource(audioElement);
-        internalSource.connect(analyserRef.current);
-        // WAŻNE: Nie łączymy `analyserRef.current` z `audioContext.destination` tutaj,
-        // ponieważ główny dźwięk jest już obsługiwany przez `AudioPlayer`.
-        // Analizator jest tylko do odczytu danych.
+  const handleAudioReady = useCallback(() => {
+    console.log("ProcessingZone: handleAudioReady called by AudioPlayer. AudioContext state:", audioContextRef.current?.state);
+    if (audioContextRef.current && audioContextRef.current.state === 'running' && analyserRef.current) {
+      console.log("ProcessingZone: Context is running, starting/restarting spectrum draw.");
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
       }
-
-
-    } catch (e) {
-      // console.error("Error setting up analyser:", e);
-      // To może się zdarzyć, jeśli źródło jest już używane.
-      // W takim przypadku, idealnie, AudioContext i source powinny być zarządzane centralnie.
+      drawSpectrum(); // Uruchom rysowanie
+    } else if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      console.warn("ProcessingZone: AudioContext is still suspended when handleAudioReady was called. User interaction with AudioPlayer controls should resume it.");
+      // Można spróbować uruchomić pętlę drawSpectrum, która poczeka na wznowienie kontekstu
+      if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = requestAnimationFrame(drawSpectrum);
+    } else {
+      console.log("ProcessingZone: handleAudioReady - conditions not fully met to start spectrum. Context state:", audioContextRef.current?.state, "Analyser:", !!analyserRef.current);
     }
+  }, [drawSpectrum]);
 
-    if (analyserRef.current) {
-       if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
-       drawSpectrum();
+  useEffect(() => {
+    if (!selectedAudio) {
+      console.log('ProcessingZone: No selectedAudio, cancelling animation frame if active.');
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+    } else if (audioContextRef.current) { // Jeśli jest wybrane audio, zaloguj stan kontekstu
+        console.log('ProcessingZone: selectedAudio changed or component updated. Current AudioContext state:', audioContextRef.current.state);
     }
-  };
+  }, [selectedAudio]);
 
 
   if (!selectedAudio) {
@@ -155,47 +130,35 @@ function ProcessingZone({ selectedAudio }) {
   return (
     <div className="zone">
       <h2>3. Przetwarzanie i Prezentacja Efektu: {selectedAudio.name}</h2>
-      <AudioPlayer
-        src={selectedAudio.url}
-        gainValue={gain}
-        filterType={filterType === 'none' ? null : filterType}
-        filterFreq={filterFrequency}
-        // Przekazanie funkcji, którą AudioPlayer może wywołać po załadowaniu metadanych,
-        // dając nam dostęp do elementu audio dla analizatora.
-        // To jest jeden ze sposobów na integrację.
-        onLoadedMetadata={(duration) => {
-            // console.log("Audio loaded, duration:", duration);
-            // Spróbuj znaleźć element audio, który AudioPlayer właśnie załadował
-            // To jest trochę "hacky", lepsze byłoby przekazanie refa
-            const audioElement = document.querySelector(`audio[src="${selectedAudio.url}"]`);
-            if (audioElement) {
-                 // Upewnij się, że kontekst jest aktywny (wymaga interakcji użytkownika)
-                if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-                    audioContextRef.current.resume().then(() => {
-                        // console.log("AudioContext resumed for spectrum");
-                        setupAnalyser(audioElement);
-                    });
-                } else if (audioContextRef.current) {
-                    setupAnalyser(audioElement);
-                }
-            }
-        }}
-      />
+      
+      {/* Informacja o stanie AudioContext dla celów deweloperskich */}
+      {audioContextRef.current && (
+        <p style={{fontSize: '0.9em', fontStyle: 'italic'}}>
+          Stan AudioContext: <span style={{fontWeight: 'bold', color: audioContextRef.current.state === 'running' ? 'green' : 'red'}}>{audioContextRef.current.state}</span>
+        </p>
+      )}
+
+      {audioContextRef.current && ( // Renderuj AudioPlayer tylko gdy kontekst jest (potencjalnie) gotowy
+        <AudioPlayer
+          key={selectedAudio.id} // Ważne dla resetowania AudioPlayera przy zmianie pliku
+          src={selectedAudio.url}
+          audioContext={audioContextRef.current}
+          analyserNodeToConnect={analyserRef.current}
+          onAudioReady={handleAudioReady}
+          gainValue={gain}
+          filterType={filterType === 'none' ? null : filterType}
+          filterFreq={filterFrequency}
+          // onLoadedMetadata={(duration) => console.log('ProcessingZone received onLoadedMetadata, duration:', duration)}
+          // onTimeUpdate={(currentTime, duration) => console.log('ProcessingZone received onTimeUpdate:', currentTime, '/', duration)}
+        />
+      )}
 
       <div className="processing-controls">
+        {/* Kontrolki gain i filter */}
         <div>
           <label htmlFor="gain">Wzmocnienie (Głośność): {Number(gain).toFixed(2)}</label>
-          <input
-            type="range"
-            id="gain"
-            min="0"
-            max="2"
-            step="0.05"
-            value={gain}
-            onChange={(e) => setGain(parseFloat(e.target.value))}
-          />
+          <input type="range" id="gain" min="0" max="2" step="0.05" value={gain} onChange={(e) => setGain(parseFloat(e.target.value))} />
         </div>
-
         <div>
           <label htmlFor="filterType">Typ Filtra:</label>
           <select id="filterType" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
@@ -204,31 +167,19 @@ function ProcessingZone({ selectedAudio }) {
             <option value="highpass">Górnoprzepustowy (High-pass)</option>
             <option value="bandpass">Pasmowoprzepustowy (Band-pass)</option>
             <option value="notch">Pasmowozaporowy (Notch)</option>
-            {/* Można dodać więcej typów filtrów Biquad */}
           </select>
         </div>
-
         {filterType !== 'none' && (
           <div>
             <label htmlFor="filterFreq">Częstotliwość Filtra: {filterFrequency} Hz</label>
-            <input
-              type="range"
-              id="filterFreq"
-              min="20"
-              max="20000" // Max dla AudioContext to zwykle połowa sampleRate
-              step="10"
-              value={filterFrequency}
-              onChange={(e) => setFilterFrequency(parseInt(e.target.value, 10))}
-            />
+            <input type="range" id="filterFreq" min="20" max="20000" step="10" value={filterFrequency} onChange={(e) => setFilterFrequency(parseInt(e.target.value, 10))} />
           </div>
         )}
-        
+
         <h3>Widmo Częstotliwości</h3>
         <canvas ref={canvasRef} width="600" height="150" className="spectrum-canvas"></canvas>
-        <p style={{fontSize: '0.8em', color: '#666'}}>
-            Uwaga: Analiza widma jest podstawowa i może wymagać interakcji użytkownika (np. kliknięcia play),
-            aby AudioContext został aktywowany w przeglądarce. Poprawna wizualizacja efektów filtrów na widmie
-            wymagałaby głębszej integracji analizatora z grafem audio w komponencie AudioPlayer.
+        <p style={{ fontSize: '0.8em', color: '#666' }}>
+          Kliknij przycisk "play" na odtwarzaczu, aby rozpocząć odtwarzanie i aktywować AudioContext (szczególnie w Chrome).
         </p>
       </div>
     </div>
