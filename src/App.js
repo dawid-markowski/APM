@@ -24,7 +24,7 @@ function App() {
     });
     console.log('App unmounted, all remaining Blob URLs revoked.'); // Możesz dodać log do testowania
   };
-}, []); // PUSTA tablica zależności - to jest kluczowa zmiana!
+}, []); // PUSTA tablica zależności - żeby działało na chromie!
 
   const handleAddAudioFile = (newFile) => {
     // Sprawdzenie czy plik (po nazwie i rozmiarze) już nie istnieje

@@ -10,7 +10,7 @@ function AcquisitionZone({ onFileAdd }) {
   const [recordingStatus, setRecordingStatus] = useState('');
 
   const handleFileChange = (event) => {
-    setPermissionError(null); // Wyczyść błędy od mikrofonu
+    setPermissionError(null); // Czyści błędy od mikrofonu
     setRecordingStatus('');
     const files = Array.from(event.target.files);
     files.forEach(file => {
@@ -50,7 +50,7 @@ function AcquisitionZone({ onFileAdd }) {
 
       mediaRecorderRef.current.onstop = () => {
         setRecordingStatus('Nagrywanie zakończone. Przetwarzanie...');
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' }); // Możesz zmienić typ, np. audio/ogg
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' }); // Możma zmienić typ, np. audio/ogg
         const fileName = `nagranie-${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.webm`;
         
         const recordedFileObject = {
