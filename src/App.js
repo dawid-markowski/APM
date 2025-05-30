@@ -1,72 +1,71 @@
-import React, { useState, useEffect } from 'react';
-import './App.css';
-import AcquisitionZone from './components/AcquisitionZone';
-import GalleryZone from './components/GalleryZone';
-import ProcessingZone from './components/ProcessingZone';
+import React, { useState, useEffect } from "react";
+import "./App.css";
+import AcquisitionZone from "./components/AcquisitionZone";
+import GalleryZone from "./components/GalleryZone";
+import ProcessingZone from "./components/ProcessingZone";
 
 function App() {
   const [audioFiles, setAudioFiles] = useState([]);
   const [selectedAudio, setSelectedAudio] = useState(null);
 
   useEffect(() => {
-  // Ten efekt (i jego funkcja czyszcząca) uruchomi się tylko raz:
-  // - konfiguracja efektu przy pierwszym montażu komponentu App
-  // - funkcja czyszcząca przy odmontowywaniu komponentu App
-
-  return () => {
-    // Ta funkcja zostanie wywołana TYLKO wtedy, gdy komponent App zostanie odmontowany.
-    // 'audioFiles' w tym miejscu odnosi się do stanu `audioFiles`
-    // w momencie ostatniego renderowania komponentu, co jest poprawne dla czyszczenia przy odmontowaniu.
-    audioFiles.forEach(file => {
-      if (file.url && file.url.startsWith('blob:')) { // Dobra praktyka, aby sprawdzić, czy to Blob URL
-        URL.revokeObjectURL(file.url);
-      }
-    });
-    console.log('App unmounted, all remaining Blob URLs revoked.'); // Możesz dodać log do testowania
-  };
-}, []); // PUSTA tablica zależności - żeby działało na chromie!
+    return () => {
+      // Czyści URLe przy odmontowaniu
+      audioFiles.forEach((file) => {
+        if (file.url && file.url.startsWith("blob:")) {
+          URL.revokeObjectURL(file.url);
+        }
+      });
+    };
+  }, []);
 
   const handleAddAudioFile = (newFile) => {
-    // Sprawdzenie czy plik (po nazwie i rozmiarze) już nie istnieje
-    if (!audioFiles.some(f => f.name === newFile.name && f.size === newFile.size)) {
-        setAudioFiles(prevFiles => [...prevFiles, newFile]);
+    // Dodawanie pliku jeśli jeszcze nie ma
+    if (
+      !audioFiles.some(
+        (f) => f.name === newFile.name && f.size === newFile.size
+      )
+    ) {
+      setAudioFiles((prevFiles) => [...prevFiles, newFile]);
     } else {
-        alert(`Plik "${newFile.name}" już znajduje się w galerii.`);
-        URL.revokeObjectURL(newFile.url); // Zwolnij nieużywany URL
+      alert(`Plik "${newFile.name}" już znajduje się w galerii.`);
+      URL.revokeObjectURL(newFile.url); // Zwolnienie nieużywanego URLa
     }
   };
 
   const handleRemoveAudioFile = (fileIdToRemove) => {
-    const fileToRemove = audioFiles.find(f => f.id === fileIdToRemove);
+    // Usunięcie pliku i jego URLa
+    const fileToRemove = audioFiles.find((f) => f.id === fileIdToRemove);
     if (fileToRemove) {
-      URL.revokeObjectURL(fileToRemove.url); // Zwolnij Object URL
+      URL.revokeObjectURL(fileToRemove.url);
     }
-    setAudioFiles(prevFiles => prevFiles.filter(file => file.id !== fileIdToRemove));
+    setAudioFiles((prevFiles) =>
+      prevFiles.filter((file) => file.id !== fileIdToRemove)
+    );
     if (selectedAudio && selectedAudio.id === fileIdToRemove) {
-      setSelectedAudio(null); // Odznacz, jeśli usunięto zaznaczony plik
+      setSelectedAudio(null); // Odznaczenie jeśli usunięto zaznaczony plik
     }
   };
 
   const handleSelectAudio = (audioFile) => {
+    // Zaznaczenie pliku
     setSelectedAudio(audioFile);
   };
-
 
   return (
     <div className="app-container">
       <h1>Aplikacja Multimedialna - Nagrania Dźwiękowe 🎤🎧</h1>
-      
+
       <AcquisitionZone onFileAdd={handleAddAudioFile} />
-      
-      <GalleryZone 
-        audioFiles={audioFiles} 
+
+      <GalleryZone
+        audioFiles={audioFiles}
         selectedAudio={selectedAudio}
         onSelectAudio={handleSelectAudio}
         onRemoveAudio={handleRemoveAudioFile}
       />
-      
-      <ProcessingZone selectedAudio={selectedAudio} />
 
+      <ProcessingZone selectedAudio={selectedAudio} />
     </div>
   );
 }
