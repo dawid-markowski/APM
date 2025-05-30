@@ -37,8 +37,7 @@ function ProcessingZone({ selectedAudio }) {
         cancelAnimationFrame(animationFrameIdRef.current);
         animationFrameIdRef.current = null;
       }
-      // Rozważ zamknięcie kontekstu, jeśli jest to główny komponent zarządzający audio
-      // i nie będzie już potrzebny. Na razie zostawiamy to do ewentualnej późniejszej obsługi.
+      
       // if (localAudioCtx && localAudioCtx.state !== 'closed') {
       //   localAudioCtx.close().catch(e => console.warn("ProcessingZone: Error closing context on unmount:", e));
       // }
@@ -94,10 +93,10 @@ function ProcessingZone({ selectedAudio }) {
       if (animationFrameIdRef.current) {
         cancelAnimationFrame(animationFrameIdRef.current);
       }
-      drawSpectrum(); // Uruchom rysowanie
+      drawSpectrum(); 
     } else if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
       console.warn("ProcessingZone: AudioContext is still suspended when handleAudioReady was called. User interaction with AudioPlayer controls should resume it.");
-      // Można spróbować uruchomić pętlę drawSpectrum, która poczeka na wznowienie kontekstu
+      
       if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
       animationFrameIdRef.current = requestAnimationFrame(drawSpectrum);
     } else {
